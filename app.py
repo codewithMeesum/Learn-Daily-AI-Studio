@@ -1,3 +1,4 @@
+import io
 import streamlit as st
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -24,7 +25,7 @@ class ContentPackage(BaseModel):
     seo_keywords: list[str]
     keyword_tags: list[str]
     hashtags: list[str]
-    accuracy_notes: list[str] = Field(description="Internal notes about verified vs uncertain claims.")
+    accuracy_notes: list[str] = Field(default_factory=list, description="Internal notes about verified vs uncertain claims.")
 
 SYSTEM_PROMPT = """
 You are the content strategist for Learn Daily AI (@learningdailyai).
@@ -45,31 +46,47 @@ Analyze content -> Separate fact from assumption -> Write 10 lowercase hooks -> 
 # ==========================================
 # 2. CORE LOGIC
 # ==========================================
-def generate_content(image, description: str) -> ContentPackage:
-    if "GEMINI_API_KEY" not in st.secrets:
-        raise ValueError("Gemini API key is missing. Add GEMINI_API_KEY to Streamlit Secrets.")
+def generate_content(uploaded_file, description_text: str) -> ContentPackage:
+    # 1. Validate API Key
+    if "GEMINI_API_KEY" not in st.secrets or not st.secrets["GEMINI_API_KEY"]:
+        raise ValueError("Gemini API key is not configured. Add GEMINI_API_KEY to Streamlit Secrets.")
     
     client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
     
+    # 2. Build contents cleanly
     contents = []
-    if image: contents.append(image)
-    if description.strip(): contents.append(description.strip())
+    
+    if uploaded_file is not None:
+        # Convert uploaded file directly into valid bytes for Gemini Part
+        uploaded_file.seek(0)
+        file_bytes = uploaded_file.read()
+        mime_type = uploaded_file.type or "image/jpeg"
+        image_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+        contents.append(image_part)
         
+    if description_text and description_text.strip():
+        contents.append(description_text.strip())
+        
+    if not contents:
+        raise ValueError("Please upload an image or enter context description.")
+
+    # 3. Request structured content
     config = types.GenerateContentConfig(
         system_instruction=SYSTEM_PROMPT,
         response_mime_type="application/json",
         response_schema=ContentPackage,
-        temperature=0.4, 
+        temperature=0.4,
     )
     
+    # Use current standard Flash model
     response = client.models.generate_content(
-        model='gemini-1.5-flash',
+        model='gemini-2.5-flash',
         contents=contents,
         config=config,
     )
     
-    if not response.text:
-        raise RuntimeError("Model returned an empty response.")
+    if not response or not response.text:
+        raise RuntimeError("Gemini returned an empty response.")
         
     return ContentPackage.model_validate_json(response.text)
 
@@ -80,7 +97,6 @@ st.set_page_config(page_title="Learn Daily AI | Studio", page_icon="⚡", layout
 
 st.markdown("""
 <style>
-    /* Dark Premium Theme */
     :root {
         --background: #0E1117;
         --text-main: #FFFFFF;
@@ -108,27 +124,32 @@ st.markdown('<p class="brand-subtitle">Content Studio</p>', unsafe_allow_html=Tr
 st.markdown('<h1 class="brand-title">LEARN DAILY AI</h1>', unsafe_allow_html=True)
 st.markdown('<p class="brand-desc">Turn your content into a ready-to-post Instagram package.</p>', unsafe_allow_html=True)
 
-# --- State ---
+# Session state initialization
 if 'generated_content' not in st.session_state: st.session_state.generated_content = None
 if 'compiled_post' not in st.session_state: st.session_state.compiled_post = None
 
-# --- Inputs ---
+# Inputs
 st.markdown("### 1. Upload Content")
 uploaded_file = st.file_uploader("Drop image here", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed")
-image = Image.open(uploaded_file) if uploaded_file else None
-if image: st.image(image, use_container_width=True)
+
+if uploaded_file:
+    image = Image.open(uploaded_file)
+    st.image(image, use_container_width=True)
 
 st.markdown("### 2. Context & Details")
 description = st.text_area("Context", height=150, label_visibility="collapsed", placeholder="Paste reel description, transcript, or explain the context...")
 
-# --- Action ---
+# Generate Action
 if st.button("GENERATE CONTENT"):
-    if not image and not description.strip():
+    has_image = uploaded_file is not None
+    has_desc = bool(description and description.strip())
+    
+    if not has_image and not has_desc:
         st.warning("Please upload an image or provide a description.")
     else:
         with st.spinner("Analyzing content & building package..."):
             try:
-                res = generate_content(image, description)
+                res = generate_content(uploaded_file, description)
                 st.session_state.generated_content = res
                 
                 fixed_cta = "Follow @learningdailyai | Here's learn something Daily."
@@ -157,9 +178,10 @@ Tags: {', '.join(res.keyword_tags)}
 ---------------------
 {' '.join(res.hashtags)}"""
             except Exception as e:
-                st.error(str(e) if isinstance(e, ValueError) else "Something went wrong while generating the content. Please try again.")
+                # Displays the actual error details instead of masking it
+                st.error(f"Error: {type(e).__name__} — {str(e)}")
 
-# --- Results ---
+# Display Results
 if st.session_state.generated_content:
     st.markdown("---")
     res = st.session_state.generated_content
