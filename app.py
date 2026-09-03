@@ -53,11 +53,13 @@ def generate_content(uploaded_file, description_text: str) -> ContentPackage:
     
     client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
     
+    # Model fallback: defaults to gemini-3.6-flash, can be overridden in secrets
+    model_name = st.secrets.get("GEMINI_MODEL", "gemini-3.6-flash")
+    
     # 2. Build contents cleanly
     contents = []
     
     if uploaded_file is not None:
-        # Convert uploaded file directly into valid bytes for Gemini Part
         uploaded_file.seek(0)
         file_bytes = uploaded_file.read()
         mime_type = uploaded_file.type or "image/jpeg"
@@ -78,9 +80,8 @@ def generate_content(uploaded_file, description_text: str) -> ContentPackage:
         temperature=0.4,
     )
     
-    # Use current standard Flash model
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model=model_name,
         contents=contents,
         config=config,
     )
@@ -178,7 +179,6 @@ Tags: {', '.join(res.keyword_tags)}
 ---------------------
 {' '.join(res.hashtags)}"""
             except Exception as e:
-                # Displays the actual error details instead of masking it
                 st.error(f"Error: {type(e).__name__} — {str(e)}")
 
 # Display Results
